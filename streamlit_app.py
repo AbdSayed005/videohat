@@ -30,6 +30,15 @@ YDL_OPTS = {
     'retries': 5,
     'fragment_retries': 5,
     'socket_timeout': 30,
+    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+    'merge_output_format': 'mp4',
+    'postprocessors': [{
+        'key': 'FFmpegVideoConvertor',
+        'preferedformat': 'mp4',
+    }, {
+        'key': 'FFmpegMetadata',
+        'add_metadata': True,
+    }],
 }
 
 def calculate_total_size(videos, selected_formats=None):
@@ -37,19 +46,16 @@ def calculate_total_size(videos, selected_formats=None):
     total_size = 0
     for video in videos:
         if selected_formats and video['url'] in selected_formats:
-            # استخدام الجودة المحددة لكل فيديو
             format_id = selected_formats[video['url']]
             for fmt in video['formats']:
                 if fmt['format_id'] == format_id:
                     total_size += fmt['filesize']
                     break
         else:
-            # استخدام أعلى جودة متاحة
             if video['formats']:
                 total_size += video['formats'][0]['filesize']
     return total_size
 
-# 🔹 استخراج معلومات الفيديو
 @st.cache_data(ttl=3600)
 def get_video_info(url):
     """استخراج معلومات الفيديو مع معالجة محسنة للأخطاء"""
@@ -85,10 +91,10 @@ def extract_video_data(url):
             if not info:
                 return None
 
-            # استخراج الجودات المتاحة
             formats = []
+            # تصفية الصيغ للحصول على الفيديوهات مع الصوت
             for f in info.get('formats', []):
-                if f.get('filesize') and f.get('ext') in ['mp4', 'webm']:
+                if f.get('acodec') != 'none' and f.get('vcodec') != 'none':
                     format_info = {
                         'format_id': f['format_id'],
                         'ext': f['ext'],
@@ -96,9 +102,24 @@ def extract_video_data(url):
                         'resolution': f.get('resolution', 'N/A'),
                         'filesize': f.get('filesize', 0),
                         'filesize_readable': humanize.naturalsize(f.get('filesize', 0)),
-                        'fps': f.get('fps', 0)
+                        'fps': f.get('fps', 0),
+                        'acodec': f.get('acodec', 'N/A'),
+                        'vcodec': f.get('vcodec', 'N/A')
                     }
                     formats.append(format_info)
+
+            # إذا لم نجد صيغ مع صوت، نضيف أفضل صيغة متاحة
+            if not formats:
+                best_format = info.get('format_id', 'best')
+                formats.append({
+                    'format_id': best_format,
+                    'ext': 'mp4',
+                    'quality': 'أفضل جودة متاحة',
+                    'resolution': 'auto',
+                    'filesize': 0,
+                    'filesize_readable': 'غير معروف',
+                    'fps': 0
+                })
 
             return {
                 'title': info.get('title', 'بدون عنوان'),
@@ -113,7 +134,6 @@ def extract_video_data(url):
         st.warning(f"⚠️ تعذر استخراج بيانات الفيديو: {str(e)}")
         return None
 
-# 🔹 تحميل الفيديو
 def download_video(url, format_id, progress_bar=None):
     """تحميل الفيديو مع عرض التقدم"""
     try:
@@ -122,11 +142,16 @@ def download_video(url, format_id, progress_bar=None):
         
         options = {
             **YDL_OPTS,
-            'format': format_id,
+            'format': f'{format_id}+bestaudio[ext=m4a]/best',
             'outtmpl': output_path,
             'progress_hooks': [
                 lambda d: update_progress(d, progress_bar)
-            ] if progress_bar else []
+            ] if progress_bar else [],
+            'merge_output_format': 'mp4',
+            'postprocessors': [{
+                'key': 'FFmpegVideoConvertor',
+                'preferedformat': 'mp4',
+            }]
         }
         
         with yt_dlp.YoutubeDL(options) as ydl:
